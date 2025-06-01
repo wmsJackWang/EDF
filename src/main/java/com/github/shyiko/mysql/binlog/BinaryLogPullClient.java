@@ -15,44 +15,14 @@
  */
 package com.github.shyiko.mysql.binlog;
 
-import com.github.shyiko.mysql.binlog.event.Event;
-import com.github.shyiko.mysql.binlog.event.EventHeader;
-import com.github.shyiko.mysql.binlog.event.EventHeaderV4;
-import com.github.shyiko.mysql.binlog.event.EventType;
-import com.github.shyiko.mysql.binlog.event.GtidEventData;
-import com.github.shyiko.mysql.binlog.event.QueryEventData;
-import com.github.shyiko.mysql.binlog.event.RotateEventData;
-import com.github.shyiko.mysql.binlog.event.deserialization.ChecksumType;
-import com.github.shyiko.mysql.binlog.event.deserialization.EventDataDeserializationException;
-import com.github.shyiko.mysql.binlog.event.deserialization.EventDataDeserializer;
-import com.github.shyiko.mysql.binlog.event.deserialization.EventDeserializer;
+import com.github.shyiko.mysql.binlog.event.*;
+import com.github.shyiko.mysql.binlog.event.deserialization.*;
 import com.github.shyiko.mysql.binlog.event.deserialization.EventDeserializer.EventDataWrapper;
-import com.github.shyiko.mysql.binlog.event.deserialization.GtidEventDataDeserializer;
-import com.github.shyiko.mysql.binlog.event.deserialization.QueryEventDataDeserializer;
-import com.github.shyiko.mysql.binlog.event.deserialization.RotateEventDataDeserializer;
 import com.github.shyiko.mysql.binlog.io.ByteArrayInputStream;
 import com.github.shyiko.mysql.binlog.jmx.BinaryLogClientMXBean;
-import com.github.shyiko.mysql.binlog.network.AuthenticationException;
-import com.github.shyiko.mysql.binlog.network.ClientCapabilities;
-import com.github.shyiko.mysql.binlog.network.DefaultSSLSocketFactory;
-import com.github.shyiko.mysql.binlog.network.SSLMode;
-import com.github.shyiko.mysql.binlog.network.SSLSocketFactory;
-import com.github.shyiko.mysql.binlog.network.ServerException;
-import com.github.shyiko.mysql.binlog.network.SocketFactory;
-import com.github.shyiko.mysql.binlog.network.TLSHostnameVerifier;
-import com.github.shyiko.mysql.binlog.network.protocol.ErrorPacket;
-import com.github.shyiko.mysql.binlog.network.protocol.GreetingPacket;
-import com.github.shyiko.mysql.binlog.network.protocol.Packet;
-import com.github.shyiko.mysql.binlog.network.protocol.PacketChannel;
-import com.github.shyiko.mysql.binlog.network.protocol.ResultSetRowPacket;
-import com.github.shyiko.mysql.binlog.network.protocol.command.AuthenticateCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.AuthenticateNativePasswordCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.Command;
-import com.github.shyiko.mysql.binlog.network.protocol.command.DumpBinaryLogCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.DumpBinaryLogGtidCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.PingCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.QueryCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.SSLRequestCommand;
+import com.github.shyiko.mysql.binlog.network.*;
+import com.github.shyiko.mysql.binlog.network.protocol.*;
+import com.github.shyiko.mysql.binlog.network.protocol.command.*;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -68,14 +38,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -87,7 +50,7 @@ import java.util.logging.Logger;
  *
  * @author <a href="mailto:stanley.shyiko@gmail.com">Stanley Shyiko</a>
  */
-public class BinaryLogClient implements BinaryLogClientMXBean {
+public class BinaryLogPullClient implements BinaryLogClientMXBean {
 
     private static final SSLSocketFactory DEFAULT_REQUIRED_SSL_MODE_SOCKET_FACTORY = new DefaultSSLSocketFactory() {
 
@@ -165,25 +128,25 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
 
     /**
      * Alias for BinaryLogClient("localhost", 3306, &lt;no schema&gt; = null, username, password).
-     * @see BinaryLogClient#BinaryLogClient(String, int, String, String, String)
+     * @see BinaryLogPullClient#BinaryLogPullClient(String, int, String, String, String)
      */
-    public BinaryLogClient(String username, String password) {
+    public BinaryLogPullClient(String username, String password) {
         this("localhost", 3306, null, username, password);
     }
 
     /**
      * Alias for BinaryLogClient("localhost", 3306, schema, username, password).
-     * @see BinaryLogClient#BinaryLogClient(String, int, String, String, String)
+     * @see BinaryLogPullClient#BinaryLogPullClient(String, int, String, String, String)
      */
-    public BinaryLogClient(String schema, String username, String password) {
+    public BinaryLogPullClient(String schema, String username, String password) {
         this("localhost", 3306, schema, username, password);
     }
 
     /**
      * Alias for BinaryLogClient(hostname, port, &lt;no schema&gt; = null, username, password).
-     * @see BinaryLogClient#BinaryLogClient(String, int, String, String, String)
+     * @see BinaryLogPullClient#BinaryLogPullClient(String, int, String, String, String)
      */
-    public BinaryLogClient(String hostname, int port, String username, String password) {
+    public BinaryLogPullClient(String hostname, int port, String username, String password) {
         this(hostname, port, null, username, password);
     }
 
@@ -195,7 +158,7 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
      * @param username login name
      * @param password password
      */
-    public BinaryLogClient(String hostname, int port, String schema, String username, String password) {
+    public BinaryLogPullClient(String hostname, int port, String schema, String username, String password) {
         this.hostname = hostname;
         this.port = port;
         this.schema = schema;
@@ -867,7 +830,7 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
         final CountDownLatch countDownLatch = new CountDownLatch(1);
         AbstractLifecycleListener connectListener = new AbstractLifecycleListener() {
             @Override
-            public void onConnect(BinaryLogClient client) {
+            public void onConnect(BinaryLogPullClient client) {
                 countDownLatch.countDown();
             }
         };
@@ -1266,39 +1229,39 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
     }
 
     /**
-     * {@link BinaryLogClient}'s event listener.
+     * {@link BinaryLogPullClient}'s event listener.
      */
     public interface EventListener {
 
-        void onEvent(Event event) throws InterruptedException;
+        void onEvent(Event event);
     }
 
     /**
-     * {@link BinaryLogClient}'s lifecycle listener.
+     * {@link BinaryLogPullClient}'s lifecycle listener.
      */
     public interface LifecycleListener {
 
         /**
          * Called once client has successfully logged in but before started to receive binlog events.
          */
-        void onConnect(BinaryLogClient client);
+        void onConnect(BinaryLogPullClient client);
 
         /**
-         * It's guarantied to be called before {@link #onDisconnect(BinaryLogClient)}) in case of
+         * It's guarantied to be called before {@link #onDisconnect(BinaryLogPullClient)}) in case of
          * communication failure.
          */
-        void onCommunicationFailure(BinaryLogClient client, Exception ex);
+        void onCommunicationFailure(BinaryLogPullClient client, Exception ex);
 
         /**
          * Called in case of failed event deserialization. Note this type of error does NOT cause client to
          * disconnect. If you wish to stop receiving events you'll need to fire client.disconnect() manually.
          */
-        void onEventDeserializationFailure(BinaryLogClient client, Exception ex);
+        void onEventDeserializationFailure(BinaryLogPullClient client, Exception ex);
 
         /**
          * Called upon disconnect (regardless of the reason).
          */
-        void onDisconnect(BinaryLogClient client);
+        void onDisconnect(BinaryLogPullClient client);
     }
 
     /**
@@ -1306,13 +1269,13 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
      */
     public static abstract class AbstractLifecycleListener implements LifecycleListener {
 
-        public void onConnect(BinaryLogClient client) { }
+        public void onConnect(BinaryLogPullClient client) { }
 
-        public void onCommunicationFailure(BinaryLogClient client, Exception ex) { }
+        public void onCommunicationFailure(BinaryLogPullClient client, Exception ex) { }
 
-        public void onEventDeserializationFailure(BinaryLogClient client, Exception ex) { }
+        public void onEventDeserializationFailure(BinaryLogPullClient client, Exception ex) { }
 
-        public void onDisconnect(BinaryLogClient client) { }
+        public void onDisconnect(BinaryLogPullClient client) { }
 
     }
 
