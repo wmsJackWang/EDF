@@ -10,18 +10,35 @@ import com.github.shyiko.mysql.binlog.event.EventType;
 
 import java.io.Serializable;
 import java.util.List;
+import java.util.function.Predicate;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class TableEventListener implements BinaryLogClient.EventListener {
+
+    private final Logger logger = Logger.getLogger(getClass().getName());
+
     TableEvent tableEvent;
     private PullStrategy pullStrategy;
+    private Predicate<String> tableFilter;
+    private List<String> supportTables;
 
-    public TableEventListener(PullStrategy pullStrategy) {
+    public List<String> getSupportTables() {
+        return supportTables;
+    }
+
+    public TableEventListener(PullStrategy pullStrategy, List<String> supportTables) {
+        if (supportTables == null || supportTables.size() == 0) {
+            throw new RuntimeException("supportTables cant be empty");
+        }
         this.pullStrategy = pullStrategy;
+        this.supportTables = supportTables;
+        tableFilter = tableName -> getSupportTables().contains(tableName);
     }
 
     @Override
     public void onEvent(Event event) throws InterruptedException {
-        System.out.println("curP:" + ((EventHeaderV4) event.getHeader()).getPosition() + "nextP: " + ((EventHeaderV4) event.getHeader()).getNextPosition() + JSON.toJSONString(event));
+//        System.out.println("curP:" + ((EventHeaderV4) event.getHeader()).getPosition() + "nextP: " + ((EventHeaderV4) event.getHeader()).getNextPosition() + JSON.toJSONString(event));
         if (event.getHeader().getEventType() == EventType.TABLE_MAP) {
             tableEvent = new TableEvent();
             tableEvent.setTableName(JSON.parseObject(JSON.toJSONString(event.getData())).getString("table"));
@@ -36,7 +53,8 @@ public class TableEventListener implements BinaryLogClient.EventListener {
             tableEvent.setDataHeader(event.getHeader());
             tableEvent.setCurPosition(((EventHeaderV4) event.getHeader()).getPosition());
             tableEvent.setNextPosition(((EventHeaderV4) event.getHeader()).getNextPosition());
-            System.out.println("command:" + tableEvent.toString());
+            tableEvent.setBinlogFile(((EventHeaderV4) event.getHeader()).getBinlogFile());
+//            System.out.println("command:" + tableEvent.toString());
         }
 
         if (event.getHeader().getEventType() == EventType.EXT_WRITE_ROWS) {
@@ -47,11 +65,18 @@ public class TableEventListener implements BinaryLogClient.EventListener {
             tableEvent.setDataHeader(event.getHeader());
             tableEvent.setCurPosition(((EventHeaderV4) event.getHeader()).getPosition());
             tableEvent.setNextPosition(((EventHeaderV4) event.getHeader()).getNextPosition());
-            System.out.println("command:" + tableEvent.toString());
+            tableEvent.setBinlogFile(((EventHeaderV4) event.getHeader()).getBinlogFile());
+//            System.out.println("command:" + tableEvent.toString());
         }
 
         if (event.getHeader().getEventType() == EventType.EXT_WRITE_ROWS || event.getHeader().getEventType() == EventType.EXT_UPDATE_ROWS) {
-            pullStrategy.pullEventData(tableEvent);
+            if (tableFilter.test(tableEvent.getTableName())) {
+                pullStrategy.pullEventData(tableEvent);
+            }else {
+                if (logger.isLoggable(Level.INFO)) {
+                    logger.info(String.format("tableName:%s not support", tableEvent.getTableName()));
+                }
+            }
         }
     }
 }

@@ -38,7 +38,7 @@ public abstract class AbstractPullStrategy implements PullStrategy {
     }
 
     public void savePosition(TableEvent tableEvent) {
-        System.out.println("saveNextPosition: " + tableEvent.getNextPosition());
+        System.out.println("saveNextPosition[ fileName:" + tableEvent.getBinlogFile() + ", position:" + tableEvent.getNextPosition() + " ]");
     }
 
 }

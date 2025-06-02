@@ -15,6 +15,9 @@
  */
 package com.github.shyiko.mysql.binlog;
 
+import com.github.shyiko.mysql.binlog.edf.core.BinlogPositionMeta;
+import com.github.shyiko.mysql.binlog.edf.core.HeartbeatConfig;
+import com.github.shyiko.mysql.binlog.edf.core.TableEventListener;
 import com.github.shyiko.mysql.binlog.event.*;
 import com.github.shyiko.mysql.binlog.event.deserialization.*;
 import com.github.shyiko.mysql.binlog.event.deserialization.EventDeserializer.EventDataWrapper;
@@ -102,7 +105,7 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
 
     private EventDeserializer eventDeserializer = new EventDeserializer();
 
-    private final List<EventListener> eventListeners = new CopyOnWriteArrayList<EventListener>();
+    private final List<BinaryLogClient.EventListener> eventListeners = new CopyOnWriteArrayList<BinaryLogClient.EventListener>();
     private final List<LifecycleListener> lifecycleListeners = new CopyOnWriteArrayList<LifecycleListener>();
 
     private SocketFactory socketFactory;
@@ -151,6 +154,14 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
     }
 
     /**
+     * Alias for BinaryLogClient(hostname, port, &lt;no schema&gt; = null, username, password).
+     * @see BinaryLogClient#BinaryLogClient(String, int, String, String, String)
+     */
+    public BinaryLogPullClient(String hostname, int port, String username, String password, BinlogPositionMeta binlogPositionMeta, HeartbeatConfig heartbeatConfig) {
+        this(hostname, port, null, username, password, binlogPositionMeta, heartbeatConfig);
+    }
+
+    /**
      * @param hostname mysql server hostname
      * @param port mysql server port
      * @param schema database name, nullable. Note that this parameter has nothing to do with event filtering. It's
@@ -164,6 +175,31 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
         this.schema = schema;
         this.username = username;
         this.password = password;
+    }
+
+    /**
+     * @param hostname mysql server hostname
+     * @param port mysql server port
+     * @param schema database name, nullable. Note that this parameter has nothing to do with event filtering. It's
+     * used only during the authentication.
+     * @param username login name
+     * @param password password
+     * @param positionMeta positionMeta
+     */
+    public BinaryLogPullClient(String hostname, int port, String schema, String username, String password, BinlogPositionMeta positionMeta, HeartbeatConfig heartbeatConfig) {
+        this.hostname = hostname;
+        this.port = port;
+        this.schema = schema;
+        this.username = username;
+        this.password = password;
+        if (positionMeta != null) {
+            this.binlogFilename = positionMeta.getBinlogFilename();
+            this.binlogPosition = positionMeta.getBinlogPosition();
+        }
+        if (heartbeatConfig != null) {
+            this.heartbeatInterval = heartbeatConfig.getHeartbeatInterval();
+        }
+
     }
 
     public boolean isBlocking() {
@@ -186,6 +222,11 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
             throw new IllegalArgumentException("SSL mode cannot be NULL");
         }
         this.sslMode = sslMode;
+    }
+
+    public void refreshBinlogPositionMeta(BinlogPositionMeta positionMeta) throws IOException {
+        this.binlogFilename = positionMeta.getBinlogFilename();
+        this.binlogPosition = positionMeta.getBinlogPosition();
     }
 
     /**
@@ -524,15 +565,22 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
                     }
                 }
             }
+
+            if (binlogPosition > 4 && binlogFilename == null) {
+                fetchBinlogFilenameAndPositionV2(channel, binlogPosition);
+            }
+
             if (binlogFilename == null) {
                 fetchBinlogFilenameAndPosition(channel);
             }
+
             if (binlogPosition < 4) {
                 if (logger.isLoggable(Level.WARNING)) {
                     logger.warning("Binary log position adjusted from " + binlogPosition + " to " + 4);
                 }
                 binlogPosition = 4;
             }
+
             ChecksumType checksumType = fetchBinlogChecksum(channel);
             if (checksumType != ChecksumType.NONE) {
                 confirmSupportOfChecksum(channel, checksumType);
@@ -636,7 +684,8 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
     }
 
     private void enableHeartbeat(final PacketChannel channel) throws IOException {
-        channel.write(new QueryCommand("set @master_heartbeat_period=" + heartbeatInterval * 1000000));
+//        channel.write(new QueryCommand("set @master_heartbeat_period=" + heartbeatInterval * 1000000));
+        channel.write(new QueryCommand("set @master_heartbeat_period=" + heartbeatInterval));
         byte[] statementResult = channel.read();
         if (statementResult[0] == (byte) 0xFF /* error */) {
             byte[] bytes = Arrays.copyOfRange(statementResult, 1, statementResult.length);
@@ -892,6 +941,25 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
         return "";
     }
 
+    private void fetchBinlogFilenameAndPositionV2(PacketChannel channel, long bizBinlogPosition) throws IOException {
+        channel.write(new QueryCommand("show master status"));
+        ResultSetRowPacket[] resultSet = readResultSet(channel);
+        if (resultSet.length == 0) {
+            throw new IOException("Failed to determine binlog filename/position");
+        }
+        String minFileName = null;
+        long minPosition = Long.MAX_VALUE;
+        for (ResultSetRowPacket row : resultSet) {
+            long newPosition = Long.parseLong(row.getValue(1));
+            if (newPosition < minPosition && bizBinlogPosition <= newPosition) {
+                minFileName = row.getValue(0);
+                minPosition = Long.parseLong(row.getValue(1));
+            }
+        }
+        binlogFilename = minFileName;
+        binlogPosition = bizBinlogPosition;
+    }
+
     private void fetchBinlogFilenameAndPosition(final PacketChannel channel) throws IOException {
         channel.write(new QueryCommand("show master status"));
         ResultSetRowPacket[] resultSet = readResultSet(channel);
@@ -1082,7 +1150,7 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
     /**
      * @return registered event listeners
      */
-    public List<EventListener> getEventListeners() {
+    public List<BinaryLogClient.EventListener> getEventListeners() {
         return Collections.unmodifiableList(eventListeners);
     }
 
@@ -1090,15 +1158,15 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
      * Register event listener. Note that multiple event listeners will be called in order they
      * where registered.
      */
-    public void registerEventListener(EventListener eventListener) {
+    public void registerEventListener(TableEventListener eventListener) {
         eventListeners.add(eventListener);
     }
 
     /**
      * Unregister all event listener of specific type.
      */
-    public void unregisterEventListener(Class<? extends EventListener> listenerClass) {
-        for (EventListener eventListener: eventListeners) {
+    public void unregisterEventListener(Class<? extends BinaryLogClient.EventListener> listenerClass) {
+        for (BinaryLogClient.EventListener eventListener: eventListeners) {
             if (listenerClass.isInstance(eventListener)) {
                 eventListeners.remove(eventListener);
             }
@@ -1108,7 +1176,7 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
     /**
      * Unregister single event listener.
      */
-    public void unregisterEventListener(EventListener eventListener) {
+    public void unregisterEventListener(BinaryLogClient.EventListener eventListener) {
         eventListeners.remove(eventListener);
     }
 
@@ -1116,8 +1184,9 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
         if (event.getData() instanceof EventDataWrapper) {
             event = new Event(event.getHeader(), ((EventDataWrapper) event.getData()).getExternal());
         }
-        for (EventListener eventListener : eventListeners) {
+        for (BinaryLogClient.EventListener eventListener : eventListeners) {
             try {
+                ((EventHeaderV4) event.getHeader()).setBinlogFile(this.binlogFilename);
                 eventListener.onEvent(event);
             } catch (Exception e) {
                 if (logger.isLoggable(Level.WARNING)) {
@@ -1226,14 +1295,6 @@ public class BinaryLogPullClient implements BinaryLogClientMXBean {
         if (channel != null && channel.isOpen()) {
             channel.close();
         }
-    }
-
-    /**
-     * {@link BinaryLogPullClient}'s event listener.
-     */
-    public interface EventListener {
-
-        void onEvent(Event event);
     }
 
     /**

@@ -17,9 +17,18 @@ public class TableEvent {
     private EventHeader dataHeader;
     private Long nextPosition;
     private Long curPosition;
+    private String binlogFile;
 
     public String toString(){
-        return "TableEvent [sqlType=" + sqlType + ", tableName=" + tableName +  ", nextPosition=" + nextPosition +  ", curPosition=" + curPosition +  ", dataSize=" + data.size() + "]";
+        return "TableEvent [sqlType=" + sqlType + ", tableName=" + tableName +  ", binlogFile=" + binlogFile+  ", nextPosition=" + nextPosition +  ", curPosition=" + curPosition +  ", dataSize=" + data.size() + "]";
+    }
+
+    public void setBinlogFile(String binlogFile) {
+        this.binlogFile = binlogFile;
+    }
+
+    public String getBinlogFile() {
+        return binlogFile;
     }
 
     public void setCurPosition(Long curPosition) {

@@ -28,7 +28,16 @@ public class EventHeaderV4 implements EventHeader {
     private long eventLength;
     // v3 (MySQL 4.0.2-4.1)
     private long nextPosition;
+    private String binlogFile;
     private int flags;
+
+    public void setBinlogFile(String binlogFile) {
+        this.binlogFile = binlogFile;
+    }
+
+    public String getBinlogFile() {
+        return binlogFile;
+    }
 
     @Override
     public long getTimestamp() {

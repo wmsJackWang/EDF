@@ -15,44 +15,14 @@
  */
 package com.github.shyiko.mysql.binlog;
 
-import com.github.shyiko.mysql.binlog.event.Event;
-import com.github.shyiko.mysql.binlog.event.EventHeader;
-import com.github.shyiko.mysql.binlog.event.EventHeaderV4;
-import com.github.shyiko.mysql.binlog.event.EventType;
-import com.github.shyiko.mysql.binlog.event.GtidEventData;
-import com.github.shyiko.mysql.binlog.event.QueryEventData;
-import com.github.shyiko.mysql.binlog.event.RotateEventData;
-import com.github.shyiko.mysql.binlog.event.deserialization.ChecksumType;
-import com.github.shyiko.mysql.binlog.event.deserialization.EventDataDeserializationException;
-import com.github.shyiko.mysql.binlog.event.deserialization.EventDataDeserializer;
-import com.github.shyiko.mysql.binlog.event.deserialization.EventDeserializer;
+import com.github.shyiko.mysql.binlog.event.*;
+import com.github.shyiko.mysql.binlog.event.deserialization.*;
 import com.github.shyiko.mysql.binlog.event.deserialization.EventDeserializer.EventDataWrapper;
-import com.github.shyiko.mysql.binlog.event.deserialization.GtidEventDataDeserializer;
-import com.github.shyiko.mysql.binlog.event.deserialization.QueryEventDataDeserializer;
-import com.github.shyiko.mysql.binlog.event.deserialization.RotateEventDataDeserializer;
 import com.github.shyiko.mysql.binlog.io.ByteArrayInputStream;
 import com.github.shyiko.mysql.binlog.jmx.BinaryLogClientMXBean;
-import com.github.shyiko.mysql.binlog.network.AuthenticationException;
-import com.github.shyiko.mysql.binlog.network.ClientCapabilities;
-import com.github.shyiko.mysql.binlog.network.DefaultSSLSocketFactory;
-import com.github.shyiko.mysql.binlog.network.SSLMode;
-import com.github.shyiko.mysql.binlog.network.SSLSocketFactory;
-import com.github.shyiko.mysql.binlog.network.ServerException;
-import com.github.shyiko.mysql.binlog.network.SocketFactory;
-import com.github.shyiko.mysql.binlog.network.TLSHostnameVerifier;
-import com.github.shyiko.mysql.binlog.network.protocol.ErrorPacket;
-import com.github.shyiko.mysql.binlog.network.protocol.GreetingPacket;
-import com.github.shyiko.mysql.binlog.network.protocol.Packet;
-import com.github.shyiko.mysql.binlog.network.protocol.PacketChannel;
-import com.github.shyiko.mysql.binlog.network.protocol.ResultSetRowPacket;
-import com.github.shyiko.mysql.binlog.network.protocol.command.AuthenticateCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.AuthenticateNativePasswordCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.Command;
-import com.github.shyiko.mysql.binlog.network.protocol.command.DumpBinaryLogCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.DumpBinaryLogGtidCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.PingCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.QueryCommand;
-import com.github.shyiko.mysql.binlog.network.protocol.command.SSLRequestCommand;
+import com.github.shyiko.mysql.binlog.network.*;
+import com.github.shyiko.mysql.binlog.network.protocol.*;
+import com.github.shyiko.mysql.binlog.network.protocol.command.*;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -68,14 +38,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -561,15 +524,22 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
                     }
                 }
             }
+
+            if (binlogPosition > 4 && binlogFilename == null) {
+                fetchBinlogFilenameAndPositionV2(channel, binlogPosition);
+            }
+
             if (binlogFilename == null) {
                 fetchBinlogFilenameAndPosition(channel);
             }
+
             if (binlogPosition < 4) {
                 if (logger.isLoggable(Level.WARNING)) {
                     logger.warning("Binary log position adjusted from " + binlogPosition + " to " + 4);
                 }
                 binlogPosition = 4;
             }
+
             ChecksumType checksumType = fetchBinlogChecksum(channel);
             if (checksumType != ChecksumType.NONE) {
                 confirmSupportOfChecksum(channel, checksumType);
@@ -927,6 +897,25 @@ public class BinaryLogClient implements BinaryLogClientMXBean {
             return resultSet[0].getValue(1).toUpperCase();
         }
         return "";
+    }
+
+    private void fetchBinlogFilenameAndPositionV2(PacketChannel channel, long bizBinlogPosition) throws IOException {
+        channel.write(new QueryCommand("show master status"));
+        ResultSetRowPacket[] resultSet = readResultSet(channel);
+        if (resultSet.length == 0) {
+            throw new IOException("Failed to determine binlog filename/position");
+        }
+        String minFileName = null;
+        long minPosition = Long.MAX_VALUE;
+        for (ResultSetRowPacket row : resultSet) {
+            long newPosition = Long.parseLong(row.getValue(1));
+            if (newPosition < minPosition && bizBinlogPosition <= newPosition) {
+                minFileName = row.getValue(0);
+                minPosition = Long.parseLong(row.getValue(1));
+            }
+        }
+        binlogFilename = minFileName;
+        binlogPosition = minPosition;
     }
 
     private void fetchBinlogFilenameAndPosition(final PacketChannel channel) throws IOException {
